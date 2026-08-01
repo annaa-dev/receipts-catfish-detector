@@ -36,6 +36,9 @@ handling, pagination, and proxy rotation, and its `run-sync-get-dataset-items`
 endpoint runs the actor and returns rows in a single HTTP call — so the whole
 ingest is one request, not a polling loop.
 
+<img width="1714" height="943" alt="image" src="https://github.com/user-attachments/assets/43711ac1-a508-4de7-8a74-ce41c45d8ac8" />
+
+
 **Elasticsearch — because a single profile cannot be fake.** One person
 exaggerating in a bio is just a person exaggerating. *Fake* is a pattern across
 accounts: the same bio reworded, posted a dozen times, by accounts created the
