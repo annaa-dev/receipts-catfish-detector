@@ -147,6 +147,8 @@ Two things, explicitly: **what the bio claims vs. what the posts prove**, and
 The `WHY THIS SCORE` block is arithmetic, not model prose — every line is a check
 against scraped data, so it's reproducible and can't be hallucinated. Checks that
 *didn't* fire are shown too, so you can see what was ruled out.
+![Uploading image.png…]()
+
 
 ## Testing approach
 
