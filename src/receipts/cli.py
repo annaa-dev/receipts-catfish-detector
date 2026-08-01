@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from .config import Config, ConfigError
 from .memory import Memory, load_mapping
@@ -135,8 +136,13 @@ def main(argv: list[str] | None = None) -> int:
             require = ("apify", "es") if args.dry_run else ("apify", "es", "claude")
             cfg = Config.load(require=require)
             memory = Memory(_es_client(cfg), cfg.index)
+            start = time.monotonic()
+
+            def stage(message: str) -> None:
+                print(f"  [{time.monotonic() - start:5.1f}s] {message}", flush=True)
+
             profile, verdict, similar = score_handle(
-                args.handle, cfg, memory, dry_run=args.dry_run
+                args.handle, cfg, memory, dry_run=args.dry_run, on_stage=stage
             )
             print(render(profile.handle, verdict, similar, profile))
             return 0

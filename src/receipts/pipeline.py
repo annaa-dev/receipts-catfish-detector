@@ -6,6 +6,7 @@ re-scored profile cannot match itself and inflate its own ring score.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -63,9 +64,23 @@ def score_handle(
     memory: Memory,
     *,
     dry_run: bool = False,
+    on_stage: Callable[[str], None] | None = None,
 ) -> tuple[Profile, Verdict, list[dict[str, Any]]]:
-    """Run the full loop for one handle. Returns what the CLI needs to render."""
+    """Run the full loop for one handle. Returns what the CLI needs to render.
+
+    `on_stage` receives a short description as each stage begins. The Apify call
+    alone takes 10-40s and produces no output while it runs, which is a long
+    silence if someone is watching. Announcing each stage turns that into visible
+    progress.
+    """
+    say = on_stage or (lambda _: None)
+
+    say(f"fetching @{handle.lstrip('@')} from Apify (bio + last 12 captions)")
     profile = fetch_profile(handle, cfg)
+    say(
+        f"got it: {len(profile.captions)} captions, "
+        f"{profile.followers:,} followers, bio {len(profile.bio)} chars"
+    )
 
     # Recall: what has this index seen that means the same thing?
     #
@@ -79,8 +94,14 @@ def score_handle(
     # the `semantic` query returns an interpretable 0-1 score instead. Exact link
     # reuse is then checked separately, so nothing is lost by not fusing here.
     if profile.bio.strip():
+        say("searching the index for bios that MEAN the same thing")
         hits = memory.semantic_search(profile.bio, exclude_handle=profile.handle)
         similar = similar_summary(hits)
+        if similar:
+            say(
+                f"closest match: @{similar[0]['handle']} "
+                f"at {similar[0]['similarity']:.3f} similarity"
+            )
     else:
         similar = []
 
@@ -102,8 +123,10 @@ def score_handle(
                 }
             )
 
+    say("offline stub verdict (--dry-run)" if dry_run else "asking the model to judge it")
     verdict = stub_verdict(profile) if dry_run else judge(profile, similar, cfg)
 
+    say("saving the verdict to Elasticsearch — the next profile is judged against it")
     memory.remember(
         to_document(
             profile,
