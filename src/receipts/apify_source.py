@@ -59,7 +59,26 @@ def fetch_profile(handle: str, cfg: Config, *, results_limit: int = 1) -> Profil
     if not rows:
         raise ProfileNotFoundError(f"No data returned for @{handle}")
 
-    profile = Profile.from_apify(rows[0])
+    # A nonexistent handle does NOT come back as an empty list or an HTTP error.
+    # The actor returns one row carrying an `error` key:
+    #
+    #   {"error": "not_found", "errorDescription": "Post does not exist",
+    #    "username": "...", "url": "..."}
+    #
+    # Without this check that row parses into a Profile with an empty bio, zero
+    # followers, and no captions — and the pipeline scores and indexes it as if
+    # it were real. Verified the hard way: it overwrote a seeded record. A
+    # mistyped handle on stage must fail loudly, not produce a confident verdict
+    # about an account that does not exist.
+    row = rows[0]
+    if row.get("error"):
+        raise ProfileNotFoundError(
+            f"@{handle}: {row.get('errorDescription') or row['error']}"
+        )
+
+    profile = Profile.from_apify(row)
+    if not profile.handle:
+        raise ProfileNotFoundError(f"@{handle}: response carried no username")
     if profile.is_private:
         raise PrivateProfileError(
             f"@{handle} is private. This tool reads public accounts only."
