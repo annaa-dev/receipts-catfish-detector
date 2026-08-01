@@ -1,0 +1,31 @@
+{
+  "mappings": {
+    "properties": {
+      "handle": { "type": "keyword" },
+      "bio": { "type": "semantic_text" },
+      "bio_raw": { "type": "text" },
+      "external_url": { "type": "keyword" },
+      "followers": { "type": "integer" },
+      "follows": { "type": "integer" },
+      "post_count": { "type": "integer" },
+      "verified": { "type": "boolean" },
+      "joined_recently": { "type": "boolean" },
+      "first_post_at": { "type": "date" },
+      "scraped_at": { "type": "date" },
+      "score": { "type": "integer" },
+      "verdict": { "type": "text" },
+      "ring_score": { "type": "float" },
+      "is_ring": { "type": "boolean" },
+      "confidence": { "type": "keyword" },
+      "claims": {
+        "type": "nested",
+        "properties": {
+          "interest": { "type": "keyword" },
+          "claimed": { "type": "integer" },
+          "evidence": { "type": "integer" },
+          "receipt": { "type": "text" }
+        }
+      }
+    }
+  }
+}
