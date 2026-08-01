@@ -57,6 +57,8 @@ All four capabilities are load-bearing:
 `recall()` runs **before** the model is called, and its results go into the
 prompt. `remember()` runs after. That is the memory loop: the tool gets better at
 spotting fakes every time it's used.
+<img width="1714" height="943" alt="image" src="https://github.com/user-attachments/assets/69d7d2a7-4645-4dbb-9b37-dc3e887831c4" />
+
 
 **Claude — because the scoring needs judgment with a citation.** It has to say
 *why*, quote a real caption, and refuse to invent a receipt when the evidence is
