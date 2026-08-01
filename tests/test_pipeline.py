@@ -80,7 +80,7 @@ def test_recall_runs_before_write(profile: Profile, monkeypatch) -> None:
     memory = Memory(client, "receipts")
     order: list[str] = []
 
-    original_search = memory.hybrid_search
+    original_search = memory.semantic_search
     original_remember = memory.remember
 
     def tracked_search(*args, **kwargs):
@@ -91,7 +91,7 @@ def test_recall_runs_before_write(profile: Profile, monkeypatch) -> None:
         order.append("write")
         return original_remember(*args, **kwargs)
 
-    monkeypatch.setattr(memory, "hybrid_search", tracked_search)
+    monkeypatch.setattr(memory, "semantic_search", tracked_search)
     monkeypatch.setattr(memory, "remember", tracked_remember)
     monkeypatch.setattr(pipeline, "fetch_profile", lambda handle, cfg: profile)
 
@@ -138,20 +138,69 @@ def test_whitespace_only_bio_treated_as_empty(profile: Profile) -> None:
     assert "bio" not in doc
 
 
-def test_empty_bio_skips_recall_entirely(profile: Profile, monkeypatch) -> None:
-    """No bio means nothing to match on — and no semantic call to fail on."""
+def test_empty_bio_skips_semantic_recall(profile: Profile, monkeypatch) -> None:
+    """No bio means nothing to match on — and no semantic call to fail on.
+
+    The exact-link check may still run, since a shared link is evidence even when
+    the bio is blank. What must not happen is a semantic query on empty text,
+    which is a 400 from the inference endpoint.
+    """
     from receipts import pipeline
 
     client = RecordingClient()
     memory = Memory(client, "receipts")
-    blank = profile.model_copy(update={"bio": ""})
+    blank = profile.model_copy(update={"bio": "", "external_url": ""})
     monkeypatch.setattr(pipeline, "fetch_profile", lambda handle, cfg: blank)
 
     _, _, similar = pipeline.score_handle("x", cfg=None, memory=memory, dry_run=True)
 
     assert similar == []
-    assert client.searches == []       # no query issued at all
+    assert client.searches == []       # no bio and no link: nothing to query
     assert len(client.indexed) == 1    # still indexed
+
+
+def test_empty_bio_still_checks_for_a_shared_link(
+    profile: Profile, monkeypatch
+) -> None:
+    from receipts import pipeline
+
+    client = RecordingClient({"hits": {"hits": [{"_source": {"handle": "twin"}}]}})
+    memory = Memory(client, "receipts")
+    blank = profile.model_copy(
+        update={"bio": "", "external_url": "https://linktr.ee/x"}
+    )
+    monkeypatch.setattr(pipeline, "fetch_profile", lambda handle, cfg: blank)
+
+    _, _, similar = pipeline.score_handle("x", cfg=None, memory=memory, dry_run=True)
+
+    # One query — the link check — and no semantic query on empty text.
+    assert len(client.searches) == 1
+    assert "semantic" not in json.dumps(client.searches[0]["body"])
+    assert similar == [
+        {
+            "handle": "twin",
+            "bio": "",
+            "similarity": None,
+            "previously_flagged": False,
+            "same_link": True,
+        }
+    ]
+
+
+def test_recall_excludes_the_handle_being_scored(
+    profile: Profile, monkeypatch
+) -> None:
+    """Regression: @patagonia matched itself after being re-scored."""
+    from receipts import pipeline
+
+    client = RecordingClient()
+    memory = Memory(client, "receipts")
+    monkeypatch.setattr(pipeline, "fetch_profile", lambda handle, cfg: profile)
+
+    pipeline.score_handle("nasa", cfg=None, memory=memory, dry_run=True)
+
+    semantic_query = client.searches[0]["body"]["query"]["bool"]
+    assert semantic_query["must_not"] == [{"term": {"handle": "nasa"}}]
 
 
 def test_stub_verdict_satisfies_the_schema(profile: Profile) -> None:

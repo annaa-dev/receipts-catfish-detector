@@ -32,7 +32,9 @@ class SearchClient(Protocol):
     """
 
     def search(self, *, index: str, body: dict[str, Any]) -> dict[str, Any]: ...
-    def index(self, *, index: str, document: dict[str, Any]) -> dict[str, Any]: ...
+    def index(
+        self, *, index: str, document: dict[str, Any], id: str | None = None
+    ) -> dict[str, Any]: ...
 
 
 def load_mapping() -> dict[str, Any]:
@@ -93,8 +95,35 @@ class Memory:
             },
         )
 
+    def link_matches(
+        self, external_url: str, *, exclude_handle: str | None = None
+    ) -> list[str]:
+        """Handles already in the index sharing this exact external link.
+
+        Complementary to semantic search rather than redundant with it: a ring
+        will reword the bio but keep the same link, so this catches the case where
+        the embedding drifts far enough apart to fall out of the kNN results.
+        """
+        if not external_url.strip():
+            return []
+        query: dict[str, Any] = {
+            "bool": {"must": [{"term": {"external_url": external_url}}]}
+        }
+        if exclude_handle:
+            query["bool"]["must_not"] = [{"term": {"handle": exclude_handle}}]
+        response = self.client.search(
+            index=self.index,
+            body={"size": 10, "_source": ["handle"], "query": query},
+        )
+        return [h["_source"]["handle"] for h in response.get("hits", {}).get("hits", [])]
+
     def hybrid_search(
-        self, text: str, *, external_url: str = "", size: int = 5
+        self,
+        text: str,
+        *,
+        external_url: str = "",
+        exclude_handle: str | None = None,
+        size: int = 5,
     ) -> dict[str, Any]:
         """Reciprocal rank fusion over semantic + exact-link retrievers.
 
@@ -115,19 +144,23 @@ class Memory:
                 {"standard": {"query": {"term": {"external_url": external_url}}}}
             )
 
-        return self.client.search(
-            index=self.index,
-            body={
-                "size": size,
-                "retriever": {
-                    "rrf": {
-                        "retrievers": retrievers,
-                        "rank_window_size": 50,
-                        "rank_constant": 20,
-                    }
-                },
+        body: dict[str, Any] = {
+            "size": size,
+            "retriever": {
+                "rrf": {
+                    "retrievers": retrievers,
+                    "rank_window_size": 50,
+                    "rank_constant": 20,
+                }
             },
-        )
+        }
+        if exclude_handle:
+            # Without this, re-scoring an existing handle retrieves its own
+            # document as the top match.
+            body["retriever"]["rrf"]["filter"] = [
+                {"bool": {"must_not": [{"term": {"handle": exclude_handle}}]}}
+            ]
+        return self.client.search(index=self.index, body=body)
 
     # ------------------------------------------------------------- aggregations
 
@@ -206,8 +239,19 @@ class Memory:
     # -------------------------------------------------------------------- write
 
     def remember(self, document: dict[str, Any]) -> dict[str, Any]:
-        """Persist a scored profile so the next one is judged against it."""
-        return self.client.index(index=self.index, document=document)
+        """Persist a scored profile so the next one is judged against it.
+
+        The handle is used as the document id, which makes writes idempotent: a
+        re-score updates the existing document instead of adding a second copy.
+        Without this, checking the same account twice leaves two documents in the
+        index, they both come back in recall, and the account matches *itself* as
+        a near-duplicate — the exact false positive the ring detection exists to
+        avoid. (Verified: @patagonia ended up with two copies before this fix.)
+        """
+        handle = document.get("handle")
+        if not handle:
+            raise ValueError("document needs a 'handle' to be addressable")
+        return self.client.index(index=self.index, id=handle, document=document)
 
 
 def similar_summary(hits: dict[str, Any]) -> list[dict[str, Any]]:

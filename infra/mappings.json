@@ -17,6 +17,7 @@
       "ring_score": { "type": "float" },
       "is_ring": { "type": "boolean" },
       "confidence": { "type": "keyword" },
+      "synthetic": { "type": "boolean" },
       "claims": {
         "type": "nested",
         "properties": {

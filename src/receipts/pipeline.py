@@ -73,11 +73,34 @@ def score_handle(
     # would fail the same way indexing does. No bio also means the account cannot
     # be a ring member — a reused template is the thing being detected, and there
     # is no template here.
+    # Semantic rather than hybrid for the recall score, for two reasons found by
+    # running it: RRF returns a *fused rank* score (rank-1 lands around 0.09),
+    # which is not a similarity and reads as "unrelated" to anyone looking at it;
+    # the `semantic` query returns an interpretable 0-1 score instead. Exact link
+    # reuse is then checked separately, so nothing is lost by not fusing here.
     if profile.bio.strip():
-        hits = memory.hybrid_search(profile.bio, external_url=profile.external_url)
+        hits = memory.semantic_search(profile.bio, exclude_handle=profile.handle)
         similar = similar_summary(hits)
     else:
         similar = []
+
+    # A ring reuses the link even when the bio drifts far enough to fall out of
+    # the kNN results, so this catches cases semantic search alone would miss.
+    twins = memory.link_matches(profile.external_url, exclude_handle=profile.handle)
+    seen = {row["handle"] for row in similar}
+    for row in similar:
+        row["same_link"] = row["handle"] in twins
+    for handle in twins:
+        if handle not in seen:
+            similar.append(
+                {
+                    "handle": handle,
+                    "bio": "",
+                    "similarity": None,
+                    "previously_flagged": False,
+                    "same_link": True,
+                }
+            )
 
     verdict = stub_verdict(profile) if dry_run else judge(profile, similar, cfg)
 

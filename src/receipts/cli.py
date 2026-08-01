@@ -15,8 +15,9 @@ import sys
 
 from .config import Config, ConfigError
 from .memory import Memory, load_mapping
-from .models import Verdict
+from .models import Profile, Verdict
 from .pipeline import score_handle
+from .signals import NOTABLE_GAP, likelihood, risk_signals
 
 
 def _es_client(cfg: Config):
@@ -30,37 +31,67 @@ def _bar(value: int, width: int = 10) -> str:
     return "█" * filled + "·" * (width - filled)
 
 
-def render(handle: str, verdict: Verdict, similar: list[dict]) -> str:
-    lines = [
+def render(
+    handle: str,
+    verdict: Verdict,
+    similar: list[dict],
+    profile: Profile | None = None,
+) -> str:
+    """Render a verdict that explains itself.
+
+    The old version printed a score with no account of where it came from. Three
+    things are now explicit: what the bio *claims*, what the posts actually
+    *show*, and which checks drove the number.
+    """
+    band, because = ("", "")
+    signals: list = []
+    if profile is not None:
+        signals = risk_signals(profile, verdict)
+        band, because = likelihood(verdict, signals)
+
+    lines = ["", f"  @{handle}"]
+    if band:
+        lines.append(f"  {band} — {because}")
+    lines += [
+        f"  authenticity {verdict.score}/10"
+        f"   ·   template match {verdict.ring_score:.2f}"
+        f"   ·   confidence {verdict.confidence}",
         "",
-        f"@{handle} — {verdict.score}/10  (confidence: {verdict.confidence})",
-        verdict.verdict,
+        f"  {verdict.verdict}",
         "",
-        f"{'interest':<12} {'claims':<12} {'evidence':<12} receipt",
+        "  INTERESTS — what the bio says vs what the posts prove",
+        f"  {'interest':<11} {'SAYS':<12} {'POSTS SHOW':<12} {'GAP':>4}  evidence",
     ]
     for claim in sorted(verdict.claims, key=lambda c: c.gap, reverse=True):
+        marker = "  <" if claim.gap >= NOTABLE_GAP else "   "
         lines.append(
-            f"{claim.interest:<12} {_bar(claim.claimed)}  {_bar(claim.evidence)}  "
-            f"{claim.receipt}"
+            f"  {claim.interest:<11} {_bar(claim.claimed)}  {_bar(claim.evidence)}  "
+            f"{claim.gap:>+4}  {claim.receipt}{marker}"
         )
+    if any(c.gap >= NOTABLE_GAP for c in verdict.claims):
+        lines.append("  (< marks a claim the posts do not support)")
+
+    if signals:
+        lines += ["", "  WHY THIS SCORE"]
+        for signal in signals:
+            mark = "✗" if signal.fired else "·"
+            lines.append(f"    {mark} {signal.name:<20} {signal.detail}")
 
     if similar:
-        lines += ["", f"Similar accounts in index: {len(similar)}"]
+        lines += ["", f"  SIMILAR BIOS ALREADY IN THE INDEX ({len(similar)})"]
         for row in similar[:5]:
-            flag = " [previously flagged]" if row.get("previously_flagged") else ""
+            flag = "  [flagged]" if row.get("previously_flagged") else ""
             lines.append(
-                f"  @{row['handle']}  similarity {row['similarity']}{flag}"
+                f"    {row['similarity']:.3f}  @{row['handle']}{flag}"
             )
-    if verdict.ring_score >= 0.7:
-        lines += [
-            "",
-            f"⚠ ring_score {verdict.ring_score:.2f} — this bio reads as a reworded "
-            "copy of accounts already indexed.",
-        ]
-    lines.append("")
-    lines.append(
-        "A low score means unverified or inconsistent. It does not mean proven fake."
-    )
+        lines.append("    (similarity is by meaning, not shared words)")
+
+    lines += [
+        "",
+        "  A low score means the bio's claims are UNVERIFIED — not that the person",
+        "  is lying. This measures whether posts back up a bio, nothing more.",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -83,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("fingerprint", help="terms over-represented in flagged bios")
     sub.add_parser("gaps", help="average claimed-vs-evidence gap per interest")
+    sub.add_parser(
+        "seed-ring",
+        help="index the labelled synthetic ring cohort (marked synthetic=true)",
+    )
+    sub.add_parser("drop-synthetic", help="remove every synthetic=true document")
+    sub.add_parser("histogram", help="creation-date clustering of flagged accounts")
 
     args = parser.parse_args(argv)
 
@@ -101,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
             profile, verdict, similar = score_handle(
                 args.handle, cfg, memory, dry_run=args.dry_run
             )
-            print(render(profile.handle, verdict, similar))
+            print(render(profile.handle, verdict, similar, profile))
             return 0
 
         cfg = Config.load(require=("es",))
@@ -123,6 +160,40 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{bucket['key']:<24} score {bucket['score']:.4f}")
         elif args.command == "gaps":
             print(json.dumps(memory.gap_by_interest(), indent=2, default=str))
+        elif args.command == "seed-ring":
+            from .seed import ring_documents
+
+            docs = ring_documents()
+            for doc in docs:
+                memory.remember(doc)
+            print(
+                f"indexed {len(docs)} synthetic ring documents "
+                "(every one marked synthetic=true). "
+                "Remove them with: receipts drop-synthetic"
+            )
+        elif args.command == "drop-synthetic":
+            client = _es_client(cfg)
+            result = client.delete_by_query(
+                index=cfg.index,
+                body={"query": {"term": {"synthetic": True}}},
+                refresh=True,
+            )
+            print(f"deleted {result['deleted']} synthetic documents")
+        elif args.command == "histogram":
+            result = memory.creation_histogram()
+            buckets = (
+                result.get("aggregations", {}).get("created", {}).get("buckets", [])
+            )
+            if not buckets:
+                print(
+                    "No creation dates available. Note: Apify's instagram-scraper "
+                    "does not expose account creation date — only a joinedRecently "
+                    "boolean. Only seeded synthetic records carry first_post_at."
+                )
+            for bucket in buckets:
+                if bucket["doc_count"]:
+                    bar = "█" * bucket["doc_count"]
+                    print(f"{bucket['key_as_string'][:10]}  {bar} {bucket['doc_count']}")
         return 0
 
     except ConfigError as exc:

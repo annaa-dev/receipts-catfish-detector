@@ -88,25 +88,60 @@ src/receipts/
   models.py         Pydantic schemas; Verdict is the model's output contract
   apify_source.py   scrape one public profile, normalize it
   memory.py         Elasticsearch as memory: BM25 / semantic / hybrid / aggs
-  judge.py          Claude scoring via structured outputs
+  judge.py          LLM scoring via structured outputs
+  signals.py        objective risk checks, so the score can explain itself
+  seed.py           labelled synthetic ring cohort for the aggregations
   pipeline.py       scrape -> recall -> judge -> remember
-  cli.py            receipts init | score | similar | fingerprint | gaps
+  cli.py            init | score | similar | fingerprint | histogram | gaps | seed-ring
 infra/mappings.json the index mapping, shared by code and Dev Tools
-tests/              25 tests, no network required
+docs/DEMO.md        5-minute demo script
+docs/GLOSSARY.md    plain-English explanations of every term used
+GUIDE.md            full setup, commands, troubleshooting, known limitations
+tests/              48 tests, no network or credentials required
 ```
 
 ## Setup
 
+See **[GUIDE.md](GUIDE.md)** for the full walkthrough. Short version:
+
 ```bash
 make setup                  # venv + deps
 cp .env.example .env        # then fill it in
-make test                   # 25 tests, no credentials needed
+make test                   # 48 tests, no credentials needed
 make init                   # create the index
 make score HANDLE=someone
 ```
 
 Add `--dry-run` to `score` to exercise the whole pipeline with an offline stub
-verdict — useful when the model connector isn't configured yet.
+verdict — the scrape, recall, and indexing all still run, only the judgment is
+stubbed. Useful before a model key is configured.
+
+## What the output shows
+
+Two things, explicitly: **what the bio claims vs. what the posts prove**, and
+**why the score is what it is**.
+
+```
+  @example_suspect
+  LIKELY MASS-PRODUCED — this bio matches a template shared with other accounts
+  authenticity 2/10   ·   template match 0.89   ·   confidence high
+
+  INTERESTS — what the bio says vs what the posts prove
+  interest    SAYS         POSTS SHOW    GAP  evidence
+  travel      █████████·  ··········    +9  no location or travel content in any post  <
+  fitness     ████████··  █·········    +7  'back at it' is the only gym reference     <
+
+  WHY THIS SCORE
+    ✗ template bio         bio similarity to template cohort: 0.89 — above threshold
+    ✗ new account          Instagram flags this account as recently created
+    ✗ thin history         7 posts total — little to verify a bio against
+    ✗ lopsided following   follows 4,400 but only 1,203 follow back
+    · no captions          2 captions available as evidence
+```
+
+The `WHY THIS SCORE` block is arithmetic, not model prose — every line is a check
+against scraped data, so it's reproducible and can't be hallucinated. Checks that
+*didn't* fire are shown too, so you can see what was ruled out.
 
 ## Testing approach
 

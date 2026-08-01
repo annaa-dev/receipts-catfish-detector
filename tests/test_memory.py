@@ -25,8 +25,10 @@ class RecordingClient:
         self.searches.append({"index": index, "body": body})
         return self._response
 
-    def index(self, *, index: str, document: dict[str, Any]) -> dict[str, Any]:
-        self.indexed.append({"index": index, "document": document})
+    def index(
+        self, *, index: str, document: dict[str, Any], id: str | None = None
+    ) -> dict[str, Any]:
+        self.indexed.append({"index": index, "id": id, "document": document})
         return {"result": "created"}
 
 
@@ -125,13 +127,56 @@ def test_gap_by_interest_uses_a_nested_aggregation() -> None:
     assert "avg_evidence" in aggs["aggs"]["by_interest"]["aggs"]
 
 
-def test_remember_writes_to_the_configured_index() -> None:
+def test_remember_uses_the_handle_as_document_id() -> None:
+    """Idempotency: a re-score must update, not add a second copy.
+
+    Two copies of one handle means the account shows up in its own recall results
+    and matches itself as a near-duplicate. Regression: @patagonia hit this.
+    """
     mem, client = memory()
     mem.remember({"handle": "x", "score": 3})
 
     assert client.indexed == [
-        {"index": "receipts", "document": {"handle": "x", "score": 3}}
+        {"index": "receipts", "id": "x", "document": {"handle": "x", "score": 3}}
     ]
+
+
+def test_remember_rejects_a_document_with_no_handle() -> None:
+    mem, _ = memory()
+    try:
+        mem.remember({"score": 3})
+    except ValueError as exc:
+        assert "handle" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_hybrid_search_can_exclude_a_handle() -> None:
+    mem, client = memory()
+    mem.hybrid_search("bio", exclude_handle="self")
+
+    rrf = client.searches[0]["body"]["retriever"]["rrf"]
+    assert rrf["filter"] == [
+        {"bool": {"must_not": [{"term": {"handle": "self"}}]}}
+    ]
+
+
+def test_link_matches_finds_shared_external_urls() -> None:
+    mem, client = memory({"hits": {"hits": [{"_source": {"handle": "twin"}}]}})
+    result = mem.link_matches("https://linktr.ee/x", exclude_handle="self")
+
+    body = client.searches[0]["body"]
+    assert body["query"]["bool"]["must"] == [
+        {"term": {"external_url": "https://linktr.ee/x"}}
+    ]
+    assert body["query"]["bool"]["must_not"] == [{"term": {"handle": "self"}}]
+    assert result == ["twin"]
+
+
+def test_link_matches_skips_empty_url_without_querying() -> None:
+    mem, client = memory()
+    assert mem.link_matches("") == []
+    assert client.searches == []
 
 
 def test_similar_summary_flattens_hits_for_the_prompt() -> None:
