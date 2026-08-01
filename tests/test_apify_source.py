@@ -26,6 +26,9 @@ CFG = Config(
     index="receipts",
     model="claude-opus-5",
     effort="medium",
+    judge_backend="auto",
+    kibana_endpoint="kb",
+    elastic_llm_connector="conn",
 )
 
 

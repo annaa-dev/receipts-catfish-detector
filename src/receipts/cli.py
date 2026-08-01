@@ -13,6 +13,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import replace
 
 from .config import Config, ConfigError
 from .memory import Memory, load_mapping
@@ -109,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="skip the model call and use the offline stub verdict",
     )
+    p_score.add_argument(
+        "--backend",
+        choices=("auto", "elastic", "anthropic"),
+        default=None,
+        help="which judge to use. 'elastic' uses Elastic's managed LLM and needs "
+        "no third-party key (default when no ANTHROPIC_API_KEY is set)",
+    )
 
     p_similar = sub.add_parser("similar", help="hybrid search against the corpus")
     p_similar.add_argument("text", help="bio text to match")
@@ -133,8 +141,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "score":
-            require = ("apify", "es") if args.dry_run else ("apify", "es", "claude")
+            require = ("apify", "es") if args.dry_run else ("apify", "es", "judge")
             cfg = Config.load(require=require)
+            if args.backend:
+                cfg = replace(cfg, judge_backend=args.backend)
+                cfg.validate(require)
             memory = Memory(_es_client(cfg), cfg.index)
             start = time.monotonic()
 

@@ -13,6 +13,7 @@ from typing import Any
 from .apify_source import fetch_profile
 from .config import Config
 from .judge import judge, stub_verdict
+from .elastic_judge import judge_via_elastic
 from .memory import Memory, similar_summary
 from .models import Profile, Verdict
 
@@ -123,8 +124,15 @@ def score_handle(
                 }
             )
 
-    say("offline stub verdict (--dry-run)" if dry_run else "asking the model to judge it")
-    verdict = stub_verdict(profile) if dry_run else judge(profile, similar, cfg)
+    if dry_run:
+        say("offline stub verdict (--dry-run)")
+        verdict = stub_verdict(profile)
+    elif cfg.resolved_backend == "elastic":
+        say("asking Claude via Elastic's managed LLM (no third-party key)")
+        verdict = judge_via_elastic(profile, similar, cfg)
+    else:
+        say("asking Claude via the Anthropic API")
+        verdict = judge(profile, similar, cfg)
 
     say("saving the verdict to Elasticsearch — the next profile is judged against it")
     memory.remember(
